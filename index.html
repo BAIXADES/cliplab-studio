@@ -176,10 +176,61 @@ function renderProjects(){var html=state.file?'<div class="toolrow"><span><stron
 function renderExportLink(clip,url){$("exportResult").innerHTML='<div class="notice good"><strong>Exportació completada.</strong> '+escapeHTML(clip.title)+' · WebM · '+clip.aspect+'<br><a class="resultlink" id="downloadResult" href="'+url+'" download="'+safeName(clip.title)+'.webm">Descarregar el clip ↓</a></div>';var a=$("downloadResult");a.click()}
 function safeName(n){return String(n).normalize("NFKD").replace(/[^a-zA-Z0-9-_]+/g,"-").replace(/^-|-$/g,"").toLowerCase()||"clip"}
 function seekTo(t){return new Promise(function(resolve,reject){var done=function(){video.removeEventListener("seeked",done);resolve()};var fail=function(){video.removeEventListener("error",fail);reject(new Error("No s'ha pogut posicionar el vídeo."))};video.addEventListener("seeked",done,{once:true});video.addEventListener("error",fail,{once:true});video.currentTime=t;if(Math.abs(video.currentTime-t)<.02&&video.readyState>=2){video.removeEventListener("seeked",done);resolve()}})}
-async function exportSelected(){var clip=selectedClip();if(!clip){toast("Selecciona un clip abans d'exportar.","error");return}if(state.exporting)return;if(!window.MediaRecorder||!HTMLCanvasElement.prototype.captureStream){toast("El teu navegador no admet l'exportació de vídeo. Prova Chrome o Edge actualitzats.","error");return}state.exporting=true;$("exportBtn").disabled=true;$("exportProgress").classList.remove("hidden");$("exportBar").style.width="0%";$("exportText").textContent="Preparant exportació…";var sizes={"9:16":[720,1280],"1:1":[1080,1080],"16:9":[1280,720]},size=sizes[clip.aspect]||sizes["9:16"],out=document.createElement("canvas");out.width=size[0];out.height=size[1];var octx=out.getContext("2d"),stream=out.captureStream(30),sourceStream=null,rec=null,rafId=0;
-try{await seekTo(clip.start);sourceStream=video.captureStream?video.captureStream():null;if(sourceStream)sourceStream.getAudioTracks().forEach(function(t){stream.addTrack(t)});var mimes=["video/webm;codecs=vp9,opus","video/webm;codecs=vp8,opus","video/webm"],mime=mimes.find(function(m){return MediaRecorder.isTypeSupported(m)})||"";rec=new MediaRecorder(stream,mime?{mimeType:mime}:undefined);var chunks=[];var done=new Promise(function(resolve,reject){rec.ondataavailable=function(e){if(e.data&&e.data.size)chunks.push(e.data)};rec.onstop=resolve;rec.onerror=function(){reject(new Error("Error durant l'exportació."))}});function draw(){var cr=cropRect(video.videoWidth,video.videoHeight,out.width,out.height,clip.visual.zoom);octx.fillStyle="#080b11";octx.fillRect(0,0,out.width,out.height);octx.save();octx.filter="brightness("+clip.visual.brightness+"%) saturate("+clip.visual.saturation+"%) blur("+clip.visual.blur+"px)";octx.drawImage(video,cr.x,cr.y,cr.w,cr.h,0,0,out.width,out.height);octx.restore();if(clip.subtitle){var oldColor=$("subColor").value,oldPos=$("subPosition").value;$("subColor").value=clip.color;$("subPosition").value=clip.position;paintSubtitle(octx,clip.subtitle,out.width,out.height,{color:clip.color,position:clip.position,style:clip.style,size:clip.size});$("subColor").value=oldColor;$("subPosition").value=oldPos}var pct=Math.min(100,Math.max(0,(video.currentTime-clip.start)/(clip.end-clip.start)*100));$("exportBar").style.width=pct+"%";$("exportText").textContent="Exportant… "+Math.round(pct)+"%"}
-rec.start(250);await video.play();await new Promise(function(resolve,reject){var stopped=false;function stop(){if(stopped)return;stopped=true;video.pause();cancelAnimationFrame(rafId);if(rec.state!=="inactive")rec.stop();resolve()}function tick(){try{draw();if(video.currentTime>=clip.end||video.ended){stop();return}rafId=requestAnimationFrame(tick)}catch(e){if(rec.state!=="inactive")rec.stop();reject(e)}}video.addEventListener("timeupdate",function endCheck(){if(video.currentTime>=clip.end){video.removeEventListener("timeupdate",endCheck);stop()}},{once:false});rafId=requestAnimationFrame(tick);setTimeout(function(){if(!stopped&&video.currentTime<clip.end){video.pause();if(rec.state!=="inactive")rec.stop();reject(new Error("L'exportació s'ha aturat. Torna-ho a provar amb un fragment més curt."))}},Math.max(45000,(clip.end-clip.start)*3500))});await done;var blob=new Blob(chunks,{type:rec.mimeType||"video/webm"});if(!blob.size)throw new Error("El fitxer exportat és buit. Comprova que el vídeo es pugui capturar al navegador.");var url=URL.createObjectURL(blob);renderExportLink(clip,url);$("exportBar").style.width="100%";$("exportText").textContent="Fet.";toast("Clip exportat correctament.","success")
-}catch(e){console.error(e);toast(e.message||"No s'ha pogut exportar el vídeo.","error")}finally{cancelAnimationFrame(rafId);video.pause();if(sourceStream)sourceStream.getTracks().forEach(function(t){t.stop()});stream.getTracks().forEach(function(t){t.stop()});state.exporting=false;$("exportBtn").disabled=!state.selectedId;setTimeout(function(){$("exportProgress").classList.add("hidden")},1600);refreshPreview()}}
+async function exportSelected(){
+ var clip=selectedClip();
+ if(!clip){toast("Selecciona un clip abans d'exportar.","error");return}
+ if(state.exporting)return;
+ if(!window.MediaRecorder||!HTMLCanvasElement.prototype.captureStream){toast("El teu navegador no admet l'exportació. Prova Chrome o Edge actualitzats.","error");return}
+ state.exporting=true;$("exportBtn").disabled=true;$("exportProgress").classList.remove("hidden");$("exportBar").style.width="0%";$("exportText").textContent="Preparant exportació…";
+ var sizes={"9:16":[720,1280],"1:1":[1080,1080],"16:9":[1280,720]},size=sizes[clip.aspect]||sizes["9:16"],out=document.createElement("canvas");
+ out.width=size[0];out.height=size[1];
+ var octx=out.getContext("2d"),stream=out.captureStream(30),sourceStream=null,rec=null,rafId=0,safetyTimer=null;
+ try{
+  await seekTo(clip.start);
+  sourceStream=video.captureStream?video.captureStream():null;
+  if(sourceStream)sourceStream.getAudioTracks().forEach(function(t){stream.addTrack(t)});
+  var mimes=["video/webm;codecs=vp9,opus","video/webm;codecs=vp8,opus","video/webm"],mime=mimes.find(function(m){return MediaRecorder.isTypeSupported(m)})||"";
+  rec=new MediaRecorder(stream,mime?{mimeType:mime}:undefined);
+  var chunks=[];
+  var done=new Promise(function(resolve,reject){rec.ondataavailable=function(e){if(e.data&&e.data.size)chunks.push(e.data)};rec.onstop=resolve;rec.onerror=function(){reject(new Error("Error durant l'exportació."))}});
+  function draw(){
+   var cr=cropRect(video.videoWidth,video.videoHeight,out.width,out.height,clip.visual.zoom);
+   octx.fillStyle="#080b11";octx.fillRect(0,0,out.width,out.height);
+   octx.save();octx.filter="brightness("+clip.visual.brightness+"%) saturate("+clip.visual.saturation+"%) blur("+clip.visual.blur+"px)";
+   octx.drawImage(video,cr.x,cr.y,cr.w,cr.h,0,0,out.width,out.height);octx.restore();
+   if(clip.subtitle)paintSubtitle(octx,clip.subtitle,out.width,out.height,{color:clip.color,position:clip.position,style:clip.style,size:Number(clip.size||42)*out.width/canvas.width});
+   var pct=Math.min(100,Math.max(0,(video.currentTime-clip.start)/(clip.end-clip.start)*100));
+   $("exportBar").style.width=pct+"%";$("exportText").textContent="Exportant… "+Math.round(pct)+"%";
+  }
+  rec.start(250);
+  await video.play();
+  await new Promise(function(resolve,reject){
+   var stopped=false;
+   function cleanup(){cancelAnimationFrame(rafId);if(safetyTimer)clearTimeout(safetyTimer);video.removeEventListener("timeupdate",endCheck)}
+   function stop(){if(stopped)return;stopped=true;cleanup();video.pause();if(rec&&rec.state!=="inactive")rec.stop();resolve()}
+   function fail(err){if(stopped)return;stopped=true;cleanup();video.pause();if(rec&&rec.state!=="inactive")rec.stop();reject(err)}
+   function endCheck(){if(video.currentTime>=clip.end||video.ended)stop()}
+   function tick(){if(stopped)return;try{draw();if(video.currentTime>=clip.end||video.ended){stop();return}rafId=requestAnimationFrame(tick)}catch(err){fail(err)}}
+   video.addEventListener("timeupdate",endCheck);
+   rafId=requestAnimationFrame(tick);
+   safetyTimer=setTimeout(function(){fail(new Error("L'exportació s'ha aturat. Prova un fragment més curt o un vídeo compatible."))},Math.max(45000,(clip.end-clip.start)*3500));
+  });
+  await done;
+  var blob=new Blob(chunks,{type:rec.mimeType||"video/webm"});
+  if(!blob.size)throw new Error("El fitxer exportat és buit. Comprova que el vídeo permeti la captura al navegador.");
+  var url=URL.createObjectURL(blob);renderExportLink(clip,url);
+  $("exportBar").style.width="100%";$("exportText").textContent="Fet.";
+  toast("Clip exportat correctament.","success");
+ }catch(e){console.error(e);toast(e.message||"No s'ha pogut exportar el vídeo.","error")}
+ finally{
+  cancelAnimationFrame(rafId);if(safetyTimer)clearTimeout(safetyTimer);video.pause();
+  if(rec&&rec.state!=="inactive"){try{rec.stop()}catch(e){}}
+  if(sourceStream)sourceStream.getTracks().forEach(function(t){t.stop()});
+  stream.getTracks().forEach(function(t){t.stop()});
+  state.exporting=false;$("exportBtn").disabled=!state.selectedId;
+  setTimeout(function(){$("exportProgress").classList.add("hidden")},1600);refreshPreview();
+ }
+}
 async function detectAudioPeaks(){if(!state.sourceUrl){toast("Importa primer un vídeo.","error");return}var panel=$("analysisProgress");panel.classList.remove("hidden");$("analysisBar").style.width="5%";$("analysisText").textContent="Llegint l'àudio localment…";$("findHighlightsBtn").disabled=true;try{var response=await fetch(state.sourceUrl,{mode:"cors"});if(!response.ok)throw new Error("No es pot llegir la font d'àudio. Comprova CORS o importa el fitxer des del dispositiu.");var data=await response.arrayBuffer();$("analysisBar").style.width="25%";$("analysisText").textContent="Descodificant l'àudio…";var AC=window.AudioContext||window.webkitAudioContext;if(!AC)throw new Error("El navegador no disposa de Web Audio API.");var ac=new AC(),buffer=await ac.decodeAudioData(data.slice(0));await ac.close();$("analysisBar").style.width="60%";$("analysisText").textContent="Analitzant pics de volum…";var sampleRate=buffer.sampleRate,channels=buffer.numberOfChannels,seconds=buffer.duration,step=Math.max(1,Math.floor(sampleRate/1000)),windowSize=Math.max(1,Math.floor(sampleRate*.5)),scores=[];for(var start=0;start<buffer.length;start+=windowSize){var end=Math.min(buffer.length,start+windowSize),sum=0,count=0;for(var ch=0;ch<channels;ch++){var arr=buffer.getChannelData(ch);for(var i=start;i<end;i+=step){var v=arr[i];sum+=v*v;count++}}scores.push({time:(start+end)/(2*sampleRate),rms:Math.sqrt(sum/Math.max(1,count))})}scores.sort(function(a,b){return b.rms-a.rms});var clipLen=Math.min(24,seconds),chosen=[];for(var k=0;k<scores.length&&chosen.length<5;k++){var center=scores[k].time;if(chosen.some(function(t){return Math.abs(t-center)<clipLen*.8}))continue;chosen.push(center)}chosen.sort(function(a,b){return a-b});chosen.forEach(function(center,i){var start=Math.max(0,Math.min(seconds-clipLen,center-clipLen*.45)),end=Math.min(seconds,start+clipLen);state.clips.push({id:"auto"+Date.now()+i,title:"Pic d'àudio "+(i+1),start:start,end:end,aspect:"9:16",subtitle:"",visual:{zoom:1,brightness:100,saturation:100,blur:0},color:$("subColor").value,position:$("subPosition").value})});if(chosen.length){state.selectedId=state.clips[state.clips.length-chosen.length].id;renderClipsList();updateStats();selectClip(state.selectedId);toast("S'han proposat "+chosen.length+" fragments a partir dels pics de volum.","success")}else toast("No s'han trobat pics d'àudio prou clars.","error");$("analysisBar").style.width="100%";$("analysisText").textContent="Anàlisi completada. És una detecció de volum, no una IA que entengui el contingut."}catch(e){toast(e.message||"No s'ha pogut analitzar l'àudio.","error");$("analysisText").textContent="No s'ha pogut completar l'anàlisi."}finally{$("findHighlightsBtn").disabled=!state.file;setTimeout(function(){panel.classList.add("hidden")},5000)}}
 function updateOverview(){updateStats()}
 function updateProjectPage(){renderProjects()}
